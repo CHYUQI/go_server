@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -39,4 +40,37 @@ func TestHellohandler(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 	}
+}
+func TestHellohandler_Metrics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.GET("/api/hello", hellohandler)
+
+	// reset global metrics to avoid cross-test contamination
+	httpRequestsTotal.Reset()
+	httpRequestDuration.Reset()
+
+	// 1st request: error path
+	reqErr, err := http.NewRequest(http.MethodGet, "/api/hello?name=err", nil)
+	assert.NoError(t, err)
+	wErr := httptest.NewRecorder()
+	r.ServeHTTP(wErr, reqErr)
+	assert.Equal(t, http.StatusInternalServerError, wErr.Code)
+
+	// 2nd request: success path
+	reqOK, err := http.NewRequest(http.MethodGet, "/api/hello?name=world", nil)
+	assert.NoError(t, err)
+	wOK := httptest.NewRecorder()
+	r.ServeHTTP(wOK, reqOK)
+	assert.Equal(t, http.StatusOK, wOK.Code)
+
+	// assert counters
+	assert.Equal(t, float64(1), testutil.ToFloat64(httpRequestsTotal.WithLabelValues("GET", "/api/hello", "500")))
+	assert.Equal(t, float64(1), testutil.ToFloat64(httpRequestsTotal.WithLabelValues("GET", "/api/hello", "200")))
+
+	// assert histogram has recorded 2 observations (one per response path)
+	count := testutil.CollectAndCount(httpRequestDuration)
+	assert.Equal(t, 2, count)
+
 }
