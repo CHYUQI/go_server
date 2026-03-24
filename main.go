@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -39,16 +43,46 @@ var (
 	)
 )
 
+// wait group to ensure all metrics events are processed before exiting
+var wg sync.WaitGroup
+
+// context to signal when to stop the metrics processing goroutine
+var ctx, cancel = context.WithCancel(context.Background())
+
 func init() {
+	// initialize the metrics processing goroutine
+
+	wg.Add(1)
+
 	go func() {
-		for event := range metricChan {
-			httpRequestsTotal.WithLabelValues(event.method, event.path, event.code).Inc()
-			httpRequestDuration.WithLabelValues(event.method, event.path, event.code).Observe(event.duration)
+		// defer wg.Done() ensures that the wait group is decremented when the goroutine finishes
+		defer wg.Done()
+
+		for {
+			select {
+			case event := <-metricChan:
+				// update Prometheus metrics based on the received event
+				httpRequestsTotal.WithLabelValues(event.method, event.path, event.code).Inc()
+				httpRequestDuration.WithLabelValues(event.method, event.path, event.code).Observe(event.duration)
+			case <-ctx.Done():
+				// if the context is canceled, exit the goroutine
+				return
+			}
 		}
 	}()
 }
 
 func main() {
+	// monitor exit signals to gracefully shut down the metrics processing goroutine
+	sigChonel := make(chan os.Signal, 1)
+	signal.Notify(sigChonel, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChonel
+		cancel()
+		wg.Wait()
+		os.Exit(0)
+	}()
+
 	r := gin.Default()
 
 	//monitor interface
