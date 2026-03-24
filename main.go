@@ -10,6 +10,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// MetricsEvent represents an HTTP request event for metrics collection
+type MetricsEvent struct {
+	method   string
+	path     string
+	code     string
+	duration float64
+}
+
+// create a channel to send metrics events
+var metricChan = make(chan MetricsEvent, 100)
+
 // define a Prometheus counter metric
 var (
 	httpRequestsTotal = promauto.NewCounterVec(
@@ -27,6 +38,15 @@ var (
 		[]string{"method", "path", "code"},
 	)
 )
+
+func init() {
+	go func() {
+		for event := range metricChan {
+			httpRequestsTotal.WithLabelValues(event.method, event.path, event.code).Inc()
+			httpRequestDuration.WithLabelValues(event.method, event.path, event.code).Observe(event.duration)
+		}
+	}()
+}
 
 func main() {
 	r := gin.Default()
@@ -56,18 +76,37 @@ func hellohandler(c *gin.Context) {
 	start := time.Now()
 	name := c.DefaultQuery("name", "world")
 
+	dur := time.Since(start).Seconds()
 	if name == "err" {
-		httpRequestsTotal.WithLabelValues("GET", "/api/hello", "500").Inc()
-		httpRequestDuration.WithLabelValues("GET", "/api/hello", "500").Observe(time.Since(start).Seconds())
+		metricChan <- MetricsEvent{
+			method:   "GET",
+			path:     "/api/hello",
+			code:     "500",
+			duration: dur,
+		}
 		c.JSON(500, gin.H{
 			"error": "internal server error",
 		})
 		return
 	}
 
-	httpRequestsTotal.WithLabelValues("GET", "/api/hello", "200").Inc()
-	httpRequestDuration.WithLabelValues("GET", "/api/hello", "200").Observe(time.Since(start).Seconds())
+	metricChan <- MetricsEvent{
+		method:   "GET",
+		path:     "/api/hello",
+		code:     "200",
+		duration: dur,
+	}
 	c.JSON(200, gin.H{
 		"message": "hello" + name,
 	})
+	// 		"error": "internal server error",
+	// 	})
+	// 	return
+	// }
+
+	// httpRequestsTotal.WithLabelValues("GET", "/api/hello", "200").Inc()
+	// httpRequestDuration.WithLabelValues("GET", "/api/hello", "200").Observe(time.Since(start).Seconds())
+	// c.JSON(200, gin.H{
+	// 	"message": "hello" + name,
+	// })
 }
